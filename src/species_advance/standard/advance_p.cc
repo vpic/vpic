@@ -5,6 +5,10 @@
 #define HAS_V4_PIPELINE
 #include "spa_private.h"
 
+//jgw
+#include <omp.h>
+//jgw
+
 void
 advance_p_pipeline( advance_p_pipeline_args_t * args,
                     int pipeline_rank,
@@ -63,13 +67,21 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
     a0 += (1+pipeline_rank)*
           POW2_CEIL((args->nx+2)*(args->ny+2)*(args->nz+2),2);
 
-  // Process particles for this pipeline
 
-  for(;n;n--,p++) {
-    dx   = p->dx;                             // Load position
-    dy   = p->dy;
-    dz   = p->dz;
-    ii   = p->i;
+  // thread private particle_t pointer
+  particle_t * ALIGNED(32) ploc;
+
+  // Process particles for this pipeline
+#pragma omp parallel for private(a,cbx,cby,cbz,dx,dy,dz,f,hax,hay,haz,ii, \
+				 local_pm,ploc,q,ux,uy,uz,v0,v1,v2,v3,v4,v5)
+  for(int nn = n; nn>0; nn--) {
+
+    ploc = p + n - nn;      // particle_t pointer for this thread
+
+    dx   = ploc->dx;                          // Load position
+    dy   = ploc->dy;
+    dz   = ploc->dz;
+    ii   = ploc->i;
     f    = f0 + ii;                           // Interpolate E
     hax  = qdt_2mc*(    ( f->ex    + dy*f->dexdy    ) +
                      dz*( f->dexdz + dy*f->d2exdydz ) );
@@ -80,10 +92,10 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
     cbx  = f->cbx + dx*f->dcbxdx;             // Interpolate B
     cby  = f->cby + dy*f->dcbydy;
     cbz  = f->cbz + dz*f->dcbzdz;
-    ux   = p->ux;                             // Load momentum
-    uy   = p->uy;
-    uz   = p->uz;
-    q    = p->w;
+    ux   = ploc->ux;                          // Load momentum
+    uy   = ploc->uy;
+    uz   = ploc->uz;
+    q    = ploc->w;
     ux  += hax;                               // Half advance E
     uy  += hay;
     uz  += haz;
@@ -103,9 +115,9 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
     ux  += hax;                               // Half advance E
     uy  += hay;
     uz  += haz;
-    p->ux = ux;                               // Store momentum
-    p->uy = uy;
-    p->uz = uz;
+    ploc->ux = ux;                            // Store momentum
+    ploc->uy = uy;
+    ploc->uz = uz;
     v0   = one/sqrtf(one + (ux*ux+ (uy*uy + uz*uz)));
     /**/                                      // Get norm displacement
     ux  *= cdt_dx;
@@ -130,9 +142,9 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
       // current quadrant in a time-step
 
       q *= qsp;
-      p->dx = v3;                             // Store new position
-      p->dy = v4;
-      p->dz = v5;
+      ploc->dx = v3;                          // Store new position
+      ploc->dy = v4;
+      ploc->dz = v5;
       dx = v0;                                // Streak midpoint
       dy = v1;
       dz = v2;
@@ -154,9 +166,13 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
       v1 -= v5;       /* v1 = q ux [ (1+dy)(1-dz) - uy*uz/3 ] */        \
       v2 -= v5;       /* v2 = q ux [ (1-dy)(1+dz) - uy*uz/3 ] */        \
       v3 += v5;       /* v3 = q ux [ (1+dy)(1+dz) + uy*uz/3 ] */        \
+      _Pragma("omp atomic")						\
       a[offset+0] += v0;                                                \
+      _Pragma("omp atomic")						\
       a[offset+1] += v1;                                                \
+      _Pragma("omp atomic")						\
       a[offset+2] += v2;                                                \
+      _Pragma("omp atomic")						\
       a[offset+3] += v3
 
       ACCUMULATE_J( x,y,z, 0 );
@@ -169,18 +185,23 @@ advance_p_pipeline( advance_p_pipeline_args_t * args,
       local_pm->dispx = ux;
       local_pm->dispy = uy;
       local_pm->dispz = uz;
-      local_pm->i     = p - p0;
+      local_pm->i     = ploc - p0;
 
-      if( move_p( p0, local_pm, a0, g, qsp ) ) { // Unlikely
+      if( move_p( p0, local_pm, a0, g, qsp )) { // Unlikely
         if( nm<max_nm ) {
-	  pm[nm++] = local_pm[0];
+	  //pm[nm++] = local_pm[0];
+	  // suspect this is not correct. the nm++ needs to be atomic with
+	  // the atomic write.
+#pragma omp atomic write
+	  pm[nm] = local_pm[0];
+#pragma omp atomic
+	  nm++;
         }
         else {
-	  itmp++;                 // Unlikely
+	  itmp++;                               // Unlikely
 	} // if
       } // if
     }
-
   }
 
   args->seg[pipeline_rank].pm        = pm;

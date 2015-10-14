@@ -287,9 +287,13 @@ move_p( particle_t       * ALIGNED(128) p0,
     v1 -= v5;             /* v1 = q ux [ (1+dy)(1-dz) - uy*uz/3 ] */  \
     v2 -= v5;             /* v2 = q ux [ (1-dy)(1+dz) - uy*uz/3 ] */  \
     v3 += v5;             /* v3 = q ux [ (1+dy)(1+dz) + uy*uz/3 ] */  \
+    _Pragma("omp atomic")					      \
     a[0] += v0;                                                       \
+    _Pragma("omp atomic")					      \
     a[1] += v1;                                                       \
+    _Pragma("omp atomic")					      \
     a[2] += v2;                                                       \
+    _Pragma("omp atomic")					      \
     a[3] += v3
     accumulate_j(x,y,z); a += 4;
     accumulate_j(y,z,x); a += 4;
